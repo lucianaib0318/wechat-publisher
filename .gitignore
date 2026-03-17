@@ -1,0 +1,14 @@
+# 环境变量文件（包含敏感信息）
+.env
+.env.local
+
+# 临时文件
+*.log
+/tmp/
+
+# Node modules（如果有）
+node_modules/
+
+# 系统文件
+.DS_Store
+Thumbs.db
