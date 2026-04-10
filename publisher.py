@@ -16,15 +16,17 @@ Example:
 """
 
 import argparse
-import base64
 import json
 import os
 import sys
 import tempfile
+import re
 from datetime import datetime
 from typing import Optional
 
 import requests
+import markdown
+from PIL import Image, ImageDraw, ImageFont
 
 
 class WeChatPublisher:
@@ -344,129 +346,197 @@ class WeChatPublisher:
         
         return None
     
-    def _markdown_to_html(self, markdown: str) -> str:
+    def _markdown_to_html(self, md_text: str) -> str:
         """
         Markdown 转微信兼容 HTML（纯内联样式）
         
-        支持：
-        - 标题（h1, h2, h3）
-        - 段落
-        - 粗体、斜体
-        - 引用块
-        - 无序列表
-        - 代码块（简单处理）
+        使用 markdown 库做基础转换，再通过正则做微信样式适配。
+        支持：标题、段落、粗体、斜体、引用、列表、代码块、链接、图片、表格。
         
         Args:
-            markdown: Markdown 格式字符串
+            md_text: Markdown 格式字符串
             
         Returns:
             微信兼容的 HTML 字符串（纯内联样式）
         """
-        lines = markdown.split('\n')
-        html_parts = []
+        # 1. 用 markdown 库做基础转换（带扩展）
+        html = markdown.markdown(md_text, extensions=[
+            'fenced_code',    # ``` 代码块
+            'codehilite',     # 代码高亮
+            'tables',         # 表格
+            'toc',            # 目录
+            'nl2br',          # 换行转 br
+            'sane_lists',     # 更安全的列表解析
+        ])
         
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # 标题
-            if line.startswith('# '):
-                title = line[2:]
-                html_parts.append(f'<section style="font-size:20px;font-weight:bold;margin:20px 0 10px;color:#333;">{title}</section>')
-            elif line.startswith('## '):
-                subtitle = line[3:]
-                html_parts.append(f'<section style="font-size:18px;font-weight:bold;margin:16px 0 8px;color:#333;">{subtitle}</section>')
-            elif line.startswith('### '):
-                subtitle = line[4:]
-                html_parts.append(f'<section style="font-size:16px;font-weight:bold;margin:12px 0 6px;color:#333;">{subtitle}</section>')
-            # 引用
-            elif line.startswith('> '):
-                quote = line[2:]
-                html_parts.append(f'<section style="border-left:4px solid #ddd;padding-left:12px;margin:12px 0;color:#666;font-style:italic;">{quote}</section>')
-            # 列表
-            elif line.startswith('- ') or line.startswith('* '):
-                item = line[2:]
-                html_parts.append(f'<section style="margin:6px 0;padding-left:20px;">• {item}</section>')
-            # 普通段落
-            else:
-                # 处理粗体和斜体
-                line = line.replace('**', '</strong><strong>')
-                line = line.replace('*', '</em><em>')
-                html_parts.append(f'<section style="font-size:17px;line-height:1.75;color:#333;margin:12px 0;word-break:break-word;">{line}</section>')
+        # 2. 标题样式化（兼容带 id 属性的 h 标签）
+        html = re.sub(
+            r'<h1[^>]*>(.*?)</h1>',
+            r'<section style="font-size:20px;font-weight:bold;margin:20px 0 10px;color:#333;">\1</section>',
+            html
+        )
+        html = re.sub(
+            r'<h2[^>]*>(.*?)</h2>',
+            r'<section style="font-size:18px;font-weight:bold;margin:16px 0 8px;color:#333;">\1</section>',
+            html
+        )
+        html = re.sub(
+            r'<h3[^>]*>(.*?)</h3>',
+            r'<section style="font-size:16px;font-weight:bold;margin:12px 0 6px;color:#333;">\1</section>',
+            html
+        )
         
-        return '\n'.join(html_parts)
+        # 3. 段落样式化
+        html = re.sub(
+            r'<p>(.*?)</p>',
+            r'<section style="font-size:17px;line-height:1.75;color:#333;margin:12px 0;word-break:break-word;">\1</section>',
+            html,
+            flags=re.DOTALL
+        )
+        
+        # 4. 引用块样式化
+        html = re.sub(
+            r'<blockquote>(.*?)</blockquote>',
+            r'<section style="border-left:4px solid #ddd;padding:8px 12px;margin:12px 0;color:#666;font-style:italic;background:#f9f9f9;">\1</section>',
+            html,
+            flags=re.DOTALL
+        )
+        
+        # 5. 代码块样式化（兼容 codehilite 扩展输出）
+        # codehilite 会在 <pre> 内插 <span></span>
+        html = re.sub(
+            r'<div class="codehilite"><pre>(?:<span></span>)?<code[^>]*>(.*?)</code></pre></div>',
+            r'<section style="background:#f6f8fa;padding:12px;border-radius:6px;margin:12px 0;overflow-x:auto;font-size:14px;"><pre style="margin:0;">\1</pre></section>',
+            html,
+            flags=re.DOTALL
+        )
+        html = re.sub(
+            r'<pre><code( class="[^"]*")?>(.*?)</code></pre>',
+            r'<section style="background:#f6f8fa;padding:12px;border-radius:6px;margin:12px 0;overflow-x:auto;font-size:14px;"><pre style="margin:0;">\2</pre></section>',
+            html,
+            flags=re.DOTALL
+        )
+        
+        # 6. 行内代码样式化
+        html = re.sub(
+            r'<code>(.*?)</code>',
+            r'<code style="background:#f6f8fa;padding:2px 6px;border-radius:3px;font-size:14px;color:#e83e8c;">\1</code>',
+            html
+        )
+        
+        # 7. 列表样式化
+        html = re.sub(
+            r'<ul>',
+            r'<section style="margin:12px 0;padding-left:20px;">',
+            html
+        )
+        html = re.sub(
+            r'</ul>',
+            r'</section>',
+            html
+        )
+        html = re.sub(
+            r'<li>',
+            r'<section style="margin:6px 0;">• ',
+            html
+        )
+        html = re.sub(
+            r'</li>',
+            r'</section>',
+            html
+        )
+        
+        # 8. 链接样式化
+        html = re.sub(
+            r'<a href="(.*?)"\s*>(.*?)</a>',
+            r'<a href="\1" style="color:#576b95;text-decoration:none;">\2</a>',
+            html
+        )
+        
+        # 9. 图片适配微信
+        html = re.sub(
+            r'<img src="(.*?)"\s*(alt="[^"]*")?\s*/?>',
+            r'<section style="text-align:center;margin:12px 0;"><img src="\1" style="max-width:100%;height:auto;border-radius:4px;" /></section>',
+            html
+        )
+        
+        # 10. 表格样式化
+        html = re.sub(
+            r'<table>',
+            r'<section style="overflow-x:auto;margin:12px 0;"><table style="width:100%;border-collapse:collapse;font-size:14px;">',
+            html
+        )
+        html = re.sub(
+            r'</table>',
+            r'</table></section>',
+            html
+        )
+        html = re.sub(
+            r'<th>',
+            r'<th style="border:1px solid #ddd;padding:8px;background:#f6f8fa;font-weight:bold;">',
+            html
+        )
+        html = re.sub(
+            r'<td>',
+            r'<td style="border:1px solid #ddd;padding:8px;">',
+            html
+        )
+        
+        return html
     
-    def upload_default_cover(self) -> Optional[str]:
+    def upload_default_cover(self, title: str = "") -> Optional[str]:
         """
         上传默认封面图（900x500 像素，微信要求最小 200x200）
         
-        策略：
-        1. 优先从 picsum.photos 获取免费占位图
-        2. 失败时使用本地生成的 BMP 图片
+        策略：使用 Pillow 生成渐变背景 + 标题文字的精美 JPG 封面。
         
         Returns:
             media_id: 上传成功返回 media_id，失败返回 None
         """
-        # 方案 1：从 picsum.photos 获取免费占位图
-        try:
-            response = requests.get("https://picsum.photos/900/500", timeout=30)
-            if response.status_code == 200:
-                with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as f:
-                    f.write(response.content)
-                    temp_path = f.name
-                
-                media_id = self.upload_image(temp_path)
-                os.unlink(temp_path)
-                return media_id
-        except Exception as e:
-            print(f"⚠️  在线获取封面失败：{e}，使用本地生成...")
-        
-        # 方案 2：本地生成简单的 BMP 图片（900x500，蓝色）
         try:
             width, height = 900, 500
-            bmp_header = self._create_bmp_header(width, height)
-            blue_pixel = bytes([0x80, 0x40, 0x20])  # 深蓝色 (BGR)
-            row_size = (width * 3 + 3) & ~3  # 行对齐
-            padding = bytes([0x00] * (row_size - width * 3))
-            row = blue_pixel * width + padding
             
-            with tempfile.NamedTemporaryFile(suffix='.bmp', delete=False) as f:
-                f.write(bmp_header)
-                for _ in range(height):
-                    f.write(row)
+            # 1. 创建渐变背景
+            img = Image.new('RGB', (width, height))
+            draw = ImageDraw.Draw(img)
+            
+            # 渐变：深蓝 -> 紫
+            for y in range(height):
+                r = int(30 + (100 - 30) * y / height)
+                g = int(40 + (60 - 40) * y / height)
+                b = int(80 + (140 - 80) * y / height)
+                draw.line([(0, y), (width, y)], fill=(r, g, b))
+            
+            # 2. 绘制标题文字
+            title_text = title[:20] if title else "Article"
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
+            except (IOError, OSError):
+                font = ImageFont.load_default()
+            
+            # 文字居中
+            bbox = draw.textbbox((0, 0), title_text, font=font)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+            text_x = (width - text_w) // 2
+            text_y = (height - text_h) // 2
+            
+            # 文字阴影
+            draw.text((text_x + 2, text_y + 2), title_text, fill=(0, 0, 0, 128), font=font)
+            draw.text((text_x, text_y), title_text, fill=(255, 255, 255, 255), font=font)
+            
+            # 3. 保存为 JPG
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as f:
+                img.save(f.name, 'JPEG', quality=90)
                 temp_path = f.name
             
             media_id = self.upload_image(temp_path)
             os.unlink(temp_path)
             return media_id
+            
         except Exception as e:
             print(f"❌ 默认封面生成失败：{e}")
             return None
-    
-    def _create_bmp_header(self, width: int, height: int) -> bytes:
-        """创建 BMP 文件头"""
-        row_size = (width * 3 + 3) & ~3
-        image_size = row_size * height
-        file_size = 54 + image_size
-        
-        return bytes([
-            0x42, 0x4D,  # BM
-            file_size & 0xFF, (file_size >> 8) & 0xFF, (file_size >> 16) & 0xFF, (file_size >> 24) & 0xFF,
-            0x00, 0x00, 0x00, 0x00,  # 保留
-            0x36, 0x00, 0x00, 0x00,  # 数据偏移
-            0x28, 0x00, 0x00, 0x00,  # 信息头大小
-            width & 0xFF, (width >> 8) & 0xFF, (width >> 16) & 0xFF, (width >> 24) & 0xFF,
-            height & 0xFF, (height >> 8) & 0xFF, (height >> 16) & 0xFF, (height >> 24) & 0xFF,
-            0x01, 0x00,  # 平面数
-            0x18, 0x00,  # 位数 (24)
-            0x00, 0x00, 0x00, 0x00,  # 压缩
-            image_size & 0xFF, (image_size >> 8) & 0xFF, (image_size >> 16) & 0xFF, (image_size >> 24) & 0xFF,
-            0x13, 0x0B, 0x00, 0x00,  # 水平分辨率
-            0x13, 0x0B, 0x00, 0x00,  # 垂直分辨率
-            0x00, 0x00, 0x00, 0x00,  # 颜色数
-            0x00, 0x00, 0x00, 0x00,  # 重要颜色
-        ])
     
     def print_config(self):
         """打印配置信息"""
@@ -523,13 +593,25 @@ def main():
     if not publisher.access_token:
         return
     
+    # 提取标题（用于封面生成）
+    cover_title = args.title or ""
+    if args.article and not cover_title:
+        try:
+            with open(args.article, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.startswith('# '):
+                        cover_title = line[2:].strip()
+                        break
+        except Exception:
+            pass
+    
     # 上传封面图（如果有）
     thumb_media_id = None
     if args.image and os.path.exists(args.image):
         thumb_media_id = publisher.upload_image(args.image)
     elif args.no_cover:
         print("📌 使用默认封面...")
-        thumb_media_id = publisher.upload_default_cover()
+        thumb_media_id = publisher.upload_default_cover(title=cover_title)
     
     # 如果有 Markdown 文件
     if args.article:

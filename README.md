@@ -29,9 +29,10 @@ Markdown ──▶ HTML ──▶ WeChat Draft Box
 
 - ✅ **One-Click Draft Creation** — Markdown input, draft box output
 - ✅ **Chinese Support** — Perfect Chinese character support, no garbled text
-- ✅ **Auto Cover** — Supports automatic 900x500 cover generation
+- ✅ **Auto Cover** — Supports automatic 900x500 cover generation (gradient JPG with title)
 - ✅ **Inline Styles** — All CSS inline, compatible with WeChat rendering
 - ✅ **Length Limits** — Auto-handles title (≤64 chars) and digest (≤120 chars)
+- ✅ **Rich Markdown** — Full support: headings, bold/italic, code blocks, blockquotes, lists, links, images, tables
 - ✅ **MacOS Code Blocks** — Supports code block styling
 
 ---
@@ -201,6 +202,14 @@ A: Login to [WeChat MP Backend](https://mp.weixin.qq.com/) → Draft Box to see 
 ---
 
 ## Changelog
+
+### v1.2.0 (2026-04-10)
+
+- ✨ Markdown 引擎升级：使用 markdown 库，支持表格/代码块/链接/图片/列表
+- ✨ 封面生成：改用 Pillow 生成渐变 JPG（替代 BMP）
+- ✨ 代码块样式化：fenced code 自动适配微信样式
+- ✨ 行内代码/链接/表格/图片自动加样式
+- 📦 新增依赖：markdown>=3.4, Pillow>=10.0
 
 ### v1.1.0 (2026-03-17)
 
